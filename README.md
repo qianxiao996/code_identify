@@ -1,10 +1,10 @@
 ## code_identify
 
-![1.jpg](img\1.jpg)
+![1.jpg](./img/1.jpg)
 
 webapi（token字段暂时未添加。）
 
-![2.png](img\2.png)
+![2.png](./img/2.png)
 
 
 
