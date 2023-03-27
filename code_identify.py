@@ -1,28 +1,29 @@
 import re
 import urllib.parse
-import qdarkstyle
 from threading import Thread
 import requests
-from PyQt5 import QtWidgets, QtCore, QtGui
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import *
+from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import *
 import  base64, json, time, sys
 import frozen_dir
 SETUP_DIR = frozen_dir.app_path()
 sys.path.append(SETUP_DIR)
+
 import web
 from ui.main import Ui_MainWindow
+from ui.ceshi import Ui_Form
 import easyocr
 import muggle_ocr
 import ddddocr
 
 # muggle_ocr_obj = muggle_ocr.SDK(model_type=muggle_ocr.ModelType.Captcha)
-muggle_ocr_obj = muggle_ocr.SDK(conf_path="./lib/captcha.yaml")
-ddddocr_obj = ddddocr.DdddOcr()
-easyocr_obj = easyocr.Reader(['en'], gpu=False)  # need to run only once to load model into memory
+muggle_ocr_obj = muggle_ocr.SDK(conf_path="./lib/muggle_ocr/captcha.yaml")
+ddddocr_obj = ddddocr.DdddOcr(ocr = True, det = False, old = False, use_gpu = False, show_ad=False, import_onnx_path = "", charsets_path = "")
+easyocr_obj = easyocr.Reader(['en'], gpu=False,model_storage_directory ='./lib/easyocr/model',user_network_directory ='./lib/easyocr/user_network ')  # need to run only once to load model into memory
 
 
-class MyApplication(web.application):
+class Web_Application(web.application):
     def run(self, port=8080, *middleware):
         func = self.wsgifunc(*middleware)
         return web.httpserver.runsimple(func, ('0.0.0.0', port))
@@ -35,14 +36,37 @@ class MainWindows(QtWidgets.QMainWindow, Ui_MainWindow):
         self.Ui.setupUi(self)
         self.setWindowIcon(QtGui.QIcon('./main.ico'))
         self.Ui.comboBox_type.currentIndexChanged.connect(self.change_comboBox_type)  # comboBox事件选中触发刷新
-        self.Ui.pushButton_start.clicked.connect(self.get_code)
+        self.Ui.pushButton_start.clicked.connect(self.code_start)
         self.Ui.tableWidget_result.verticalHeader().setDefaultSectionSize(50)
-        self.Ui.tableWidget_result.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.Ui.tableWidget_result.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.Ui.tableWidget_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.Ui.tableWidget_result.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.Ui.pushButton_ceshi.clicked.connect(self.re_image)
         self.Ui.pushButton_web.clicked.connect(self.web_server)
-        self.webapp = MyApplication(urls, globals())
+        self.webapp = Web_Application(urls, globals())
+        self.Ui.comboBox_methods.currentIndexChanged.connect(self.change_comboBox_post)  # comboBox事件选中触发刷新
 
         self.Ui.pushButton_path.clicked.connect(self.bendi_code)
+        self.change_comboBox_post()
+
+    def re_image(self):
+        content, image_content = self.get_code()
+        if content and image_content:
+            self.ceshi_form = QtWidgets.QWidget()
+            self.widget = Ui_Form()
+            self.widget.setupUi(self.ceshi_form)
+            # self.form2.setStyleSheet(qss_style)
+            self.ceshi_form.setWindowIcon(QtGui.QIcon('./main.ico'))
+            self.ceshi_form.setWindowTitle('图片匹配测试')
+            photo = QPixmap()
+            photo.loadFromData(str(image_content).encode('ISO-8859-1'))
+            self.widget.label_image_result.setPixmap(photo)
+            self.widget.label_image_result.setScaledContents(True)  # 让图片自适应label大小
+            self.widget.plainTextEdit_data.setPlainText(str(content))
+            self.widget.plainTextEdit_re_data.setPlainText(str(image_content))
+            self.ceshi_form.show()
+        else:
+            box = QtWidgets.QMessageBox(window)
+            box.warning(self, "Error", "返回包获取失败！")
 
     def web_server(self):
         if self.Ui.pushButton_web.text() == "开启WEB接口":
@@ -58,7 +82,7 @@ class MainWindows(QtWidgets.QMainWindow, Ui_MainWindow):
                     sk.connect(('127.0.0.1', 9090))
                     self.Ui.pushButton_web.setText("关闭服务")
                     box = QtWidgets.QMessageBox(window)
-                    box.warning(self, "Success", "服务开启成功！\n访问地址:http://0.0.0.0:9090" + error)
+                    box.information(self, "WEB Api", "服务开启成功！\n访问地址:http://0.0.0.0:9090" + error)
                     return
                 except Exception as e:
                     error = str(e)
@@ -75,9 +99,16 @@ class MainWindows(QtWidgets.QMainWindow, Ui_MainWindow):
         except:
             pass
 
+    def change_comboBox_post(self):
+        panduan_type = self.Ui.comboBox_methods.currentText()
+        if panduan_type == "GET":
+            self.Ui.frame.hide()
+        else:
+            self.Ui.frame.show()
+
     def change_comboBox_type(self):
         panduan_type = self.Ui.comboBox_type.currentText()
-        if panduan_type == "Response Data":
+        if panduan_type == "Response":
             self.Ui.lineEdit_type_text.setEnabled(False)
         elif panduan_type == "JSON Match":
             self.Ui.lineEdit_type_text.setEnabled(True)
@@ -106,26 +137,52 @@ class MainWindows(QtWidgets.QMainWindow, Ui_MainWindow):
                 response = json.loads(content)
             except:
                 box = QtWidgets.QMessageBox(window)
-                box.warning(self, "Error", "返回数据不是json")
+                box.warning(self, "Error", "返回数据不是json\n%s"%content)
                 return None
-            content = eval(match_text)
+            try:
+                content = eval(match_text)
+            except:
+                box = QtWidgets.QMessageBox(window)
+                box.warning(self, "Error", "json匹配失败")
+                return None
+
             return content
 
 
 
         else:
             return content
-
-    def get_code(self):
+    def code_start(self):
+        content, image_content = self.get_code()
+        if image_content:
+            photo = QPixmap()
+            photo.loadFromData(image_content.encode('ISO-8859-1'))
+            self.Ui.label_code_result.setPixmap(photo)
+            self.Ui.label_code_result.setScaledContents(True)  # 让图片自适应label大小
+            type = self.Ui.comboBox.currentText()
+            code_result = self.code_identify(type, image_content.encode('ISO-8859-1'))
+            aaa_time = time.strftime("%H:%M:%S", time.localtime())
+            self.add_table(aaa_time, str(image_content), code_result, '%s' % type)
+            self.Ui.plainTextEdit_log.appendPlainText(aaa_time + ":" + code_result)
+    def get_code\
+                    (self):
         try:
+            content=""
             url = self.Ui.lineEdit_url.text()
             if not url:
-                return
+                return '',''
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36 by qianxiao996",
-                "Referer": url
+                "Referer": url,
             }
-            r = requests.get(url, headers=headers, timeout=3,verify=False)
+            methods = self.Ui.comboBox_methods.currentText()
+            if methods=="GET":
+                r = requests.get(url, headers=headers, timeout=3,verify=False)
+            elif methods=="POST":
+                headers["Content-Type"]=self.Ui.comboBox_content_type.currentText()
+                r = requests.post(url, headers=headers, timeout=3,verify=False,data=str(self.Ui.lineEdit_post.text()))
+            else:
+                r = requests.get(url, headers=headers, timeout=3,verify=False)
             try:
                 content = self.get_response_text(r.content.decode('ISO-8859-1'))
             except Exception as e:
@@ -135,29 +192,24 @@ class MainWindows(QtWidgets.QMainWindow, Ui_MainWindow):
                 return
             if content:
                 try:
-                    content = self.image_decode(content)
+                    image_content = self.image_decode(content)
+                    return r.content.decode('ISO-8859-1'), image_content
                 except:
                     box = QtWidgets.QMessageBox(window)
                     box.warning(self, "Error", "解码失败！")
-                    return
-                photo = QPixmap()
-                photo.loadFromData(content.encode('ISO-8859-1'))
-                self.Ui.label_code_result.setPixmap(photo)
-                self.Ui.label_code_result.setScaledContents(True)  # 让图片自适应label大小
-                type = self.Ui.comboBox.currentText()
-                code_result = self.code_identify(type, content.encode('ISO-8859-1'))
-                aaa_time = time.strftime("%H:%M:%S", time.localtime())
-                self.add_table(aaa_time, str(content), code_result, '本地识别')
-                self.Ui.plainTextEdit_log.appendPlainText(aaa_time + ":" + code_result)
+                    return '',''
             else:
                 self.Ui.label_code_result.setText("获取图片失败！")
-        except:
-            pass
+                return '', ''
+        except Exception as e:
+            box = QtWidgets.QMessageBox()
+            box.warning(self, "Error",str(e)+"\n图像结果：\n"+str(content))
     def image_decode(self, content):
         decode_type = self.Ui.comboBox_encode.currentText()
         if decode_type == "无":
             return content
         elif decode_type == "Base64":
+            content = content.split(",")[-1]
             return (base64.b64decode(content.strip().replace(' ', '').replace('\r', '').replace('\n', ''))).decode('ISO-8859-1')
         elif decode_type == "Hex":
             content = content.replace('0x', '').replace('0X', '')
@@ -235,7 +287,6 @@ urls = (
 
 )
 
-
 class index:
     def GET(self):
         web.header("Content-Type", "text/html; charset=UTF-8")
@@ -290,7 +341,7 @@ class muggle_ocr_base64:
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    app.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+    # app.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
     # app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api='pyqt5'))
     # app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api='pyqt5', palette=LightPalette()))
 
